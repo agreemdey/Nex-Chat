@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import Cropper from 'react-easy-crop'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../Context/AuthContext'
+import { useChat } from '../Context/ChatContext'
+import { getBlockedUsers, getUserById } from '../Services/api'
 import { supabase } from '../Services/supabase'
 import '../Styles/Register-Login.css'
 
@@ -55,7 +57,8 @@ const uploadAvatarToBucket = async (file, userId) => {
 
   for (const bucketName of candidateBuckets) {
     const extension = file.name.split('.').pop()?.toLowerCase() || 'jpg'
-    const path = `${userId}/avatar.${extension}`
+    const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+    const path = `${userId}/avatar-${uniqueSuffix}.${extension}`
     const { error } = await supabase.storage.from(bucketName).upload(path, file, {
       upsert: true,
       contentType: file.type,
@@ -81,11 +84,14 @@ const uploadAvatarToBucket = async (file, userId) => {
 
 function Profile() {
   const navigate = useNavigate()
-  const { user, updateProfile } = useAuth()
+  const { user, accessToken, updateProfile } = useAuth()
+  const { blockedUsers, toggleBlockUser } = useChat()
   const [fullName, setFullName] = useState(user?.name ?? '')
   const [username, setUsername] = useState(user?.username ?? '')
   const [bio, setBio] = useState(user?.bio ?? 'Available for a quick chat')
   const [avatarUrl, setAvatarUrl] = useState(user?.avatarUrl ?? '')
+  const [selectedAvatarName, setSelectedAvatarName] = useState('')
+  const [blockedContacts, setBlockedContacts] = useState([])
   const [isSaving, setIsSaving] = useState(false)
   const [isEditing, setIsEditing] = useState(false)
   const [isCropping, setIsCropping] = useState(false)
@@ -114,6 +120,65 @@ function Profile() {
     setAvatarUrl(user?.avatarUrl ?? '')
   }, [user])
 
+  useEffect(() => {
+    if (!accessToken || !user?.id) {
+      setBlockedContacts([])
+      return undefined
+    }
+
+    let active = true
+
+    const loadBlockedContacts = async () => {
+      try {
+        const rows = await getBlockedUsers(accessToken)
+        if (!active || !Array.isArray(rows)) {
+          return
+        }
+
+        const blockedIds = rows
+          .map((row) => row?.user_id ?? row?.blocked_id ?? row?.id)
+          .filter(Boolean)
+          .map(String)
+
+        if (!blockedIds.length) {
+          setBlockedContacts([])
+          return
+        }
+
+        const profiles = await Promise.all(
+          blockedIds.map(async (blockedId) => {
+            try {
+              const profile = await getUserById(blockedId, accessToken)
+              return {
+                id: blockedId,
+                name: profile?.full_name || profile?.username || 'Blocked user',
+                username: profile?.username || 'unknown',
+                avatarUrl: profile?.avatar_url || null,
+              }
+            } catch {
+              return {
+                id: blockedId,
+                name: 'Blocked user',
+                username: 'unknown',
+                avatarUrl: null,
+              }
+            }
+          }),
+        )
+
+        if (active) setBlockedContacts(profiles)
+      } catch {
+        if (active) setBlockedContacts([])
+      }
+    }
+
+    loadBlockedContacts()
+
+    return () => {
+      active = false
+    }
+  }, [accessToken, user?.id, blockedUsers])
+
   const handleAvatarChange = async (event) => {
     const file = event.target.files?.[0]
     if (!file || !user?.id) return
@@ -122,6 +187,7 @@ function Profile() {
     setMessage('')
 
     try {
+      setSelectedAvatarName(file.name)
       const imageSrc = await readFileAsDataUrl(file)
       setCropEditor({
         open: true,
@@ -134,8 +200,6 @@ function Profile() {
     } catch (uploadError) {
       setError(`Avatar upload failed: ${uploadError.message}`)
     }
-
-    event.target.value = ''
   }
 
   const handleCropAndUpload = async () => {
@@ -153,6 +217,7 @@ function Profile() {
       const result = await uploadAvatarToBucket(finalFile, user.id)
 
       setAvatarUrl(result.publicUrl)
+      setSelectedAvatarName(cropEditor.file?.name || selectedAvatarName)
       setCropEditor({ open: false, imageSrc: '', crop: { x: 0, y: 0 }, zoom: 1, pixelCrop: null, file: null })
       setMessage('Avatar cropped and uploaded. Save your profile to apply it.')
     } catch (uploadError) {
@@ -269,11 +334,36 @@ function Profile() {
           </div>
 
           <div className="profile-list">
-            
             <div className="profile-row">
-              <span>Blocked users (Feature will be added soon)</span>
-              <strong>0</strong>
+              <span>Blocked users</span>
+              <strong>{blockedContacts.length}</strong>
             </div>
+
+            {blockedContacts.length > 0 && blockedContacts.map((blockedContact) => (
+              <div key={blockedContact.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', padding: '10px 14px', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
+                  <span style={{ width: '32px', height: '32px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.08)', fontWeight: 700, overflow: 'hidden', flexShrink: 0 }}>
+                    {blockedContact.avatarUrl ? (
+                      <img src={blockedContact.avatarUrl} alt={blockedContact.name} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} />
+                    ) : (
+                      (blockedContact.name || 'U').charAt(0).toUpperCase()
+                    )}
+                  </span>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{blockedContact.name}</div>
+                    <small style={{ opacity: 0.75 }}>@{blockedContact.username}</small>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => toggleBlockUser(blockedContact.id)}
+                  style={{ border: 'none', borderRadius: '999px', padding: '8px 12px', background: 'rgba(255,255,255,0.08)', color: '#fff', cursor: 'pointer' }}
+                >
+                  Unblock
+                </button>
+              </div>
+            ))}
           </div>
 
           {isEditing && (
@@ -297,6 +387,7 @@ function Profile() {
                 <label className="full-width">
                   <span>Profile photo</span>
                   <input type="file" accept="image/*" onChange={handleAvatarChange} />
+                  {selectedAvatarName && <small style={{ display: 'block', marginTop: '8px', opacity: 0.8 }}>Selected: {selectedAvatarName}</small>}
                 </label>
 
                 <div className="avatar-actions full-width">

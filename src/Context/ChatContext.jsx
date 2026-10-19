@@ -2,9 +2,11 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import {
   addConversationMembers,
+  blockUser as blockUserRequest,
   clearConversationMessages as clearConversationMessagesRequest,
   createConversation as createConversationRequest,
   deleteConversation as deleteConversationRequest,
+  getBlockedUsers as getBlockedUsersRequest,
   getChats,
   getMessages,
   editMessage as editMessageRequest,
@@ -15,6 +17,7 @@ import {
   searchUsers as searchUsersRequest,
   sendMessage as sendMessageRequest,
   togglePinMessage as togglePinMessageRequest,
+  unblockUser as unblockUserRequest,
   updateConversationState,
 } from '../Services/api'
 import { isSupabaseConfigured, supabase } from '../Services/supabase'
@@ -185,6 +188,39 @@ export function ChatProvider({ children }) {
   useEffect(() => {
     currentChatIdRef.current = currentChat?.id
   }, [currentChat?.id])
+
+  useEffect(() => {
+    if (!accessToken || !user?.id) {
+      setBlockedUsers([])
+      return undefined
+    }
+
+    let cancelled = false
+
+    const loadBlockedUsers = async () => {
+      try {
+        const response = await getBlockedUsersRequest(accessToken)
+        if (cancelled) return
+
+        const nextBlockedUsers = Array.isArray(response)
+          ? response
+              .map((entry) => entry?.user_id ?? entry?.blocked_id ?? entry?.id ?? null)
+              .filter(Boolean)
+          : []
+
+        setBlockedUsers(nextBlockedUsers)
+      } catch (error) {
+        console.warn('Could not load blocked users:', error)
+        if (!cancelled) setBlockedUsers([])
+      }
+    }
+
+    loadBlockedUsers()
+
+    return () => {
+      cancelled = true
+    }
+  }, [accessToken, user?.id])
 
   useEffect(() => {
     if (!isSupabaseConfigured || !accessToken || !user?.id) return undefined
@@ -729,14 +765,31 @@ export function ChatProvider({ children }) {
     }))
   }
 
-  const toggleBlockUser = (userId) => {
-    if (!userId) return
+  const toggleBlockUser = async (userId) => {
+    if (!userId || !accessToken) return
 
-    setBlockedUsers((currentUsers) => (
-      currentUsers.includes(userId)
-        ? currentUsers.filter((id) => id !== userId)
-        : [...currentUsers, userId]
-    ))
+    const normalizedUserId = String(userId)
+    const normalizedBlockedUsers = blockedUsers.map(String)
+    const isCurrentlyBlocked = normalizedBlockedUsers.includes(normalizedUserId)
+
+    try {
+      if (isCurrentlyBlocked) {
+        await unblockUserRequest(normalizedUserId, accessToken)
+      } else {
+        await blockUserRequest(normalizedUserId, accessToken)
+      }
+
+      setBlockedUsers((currentUsers) => {
+        const nextValues = currentUsers.map(String)
+        return (isCurrentlyBlocked
+          ? nextValues.filter((id) => id !== normalizedUserId)
+          : [...new Set([...nextValues, normalizedUserId])]
+        )
+      })
+    } catch (error) {
+      console.error('Failed to update block state:', error)
+      setChatError(error.message || 'Could not update the block state.')
+    }
   }
 
   const clearCurrentConversation = async (conversationId = currentChat?.id) => {

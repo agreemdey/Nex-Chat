@@ -1,5 +1,6 @@
 /* global require, module */
 const supabase = require('../config/database')
+const { normalizeBlockedSet, isConversationBlockedForUser } = require('../utils/blocking')
 
 const getMessages = async (req, res) => {
     try {
@@ -17,6 +18,34 @@ const getMessages = async (req, res) => {
 
         if (!membership) {
             return res.status(403).json({ error: 'You are not a member of this conversation' })
+        }
+
+        const { data: conversationMembers, error: membersError } = await supabase
+            .from('conversation_members')
+            .select('user_id')
+            .eq('conversation_id', conversationId)
+
+        if (membersError) return res.status(500).json({ error: membersError.message })
+
+        const { data: blockedRows, error: blockedError } = await supabase
+            .from('blocked_users')
+            .select('blocked_id')
+            .eq('blocker_id', req.user.id)
+
+        if (blockedError) return res.status(500).json({ error: blockedError.message })
+
+        const { data: blockedMeRows, error: blockedMeError } = await supabase
+            .from('blocked_users')
+            .select('blocker_id')
+            .eq('blocked_id', req.user.id)
+
+        if (blockedMeError) return res.status(500).json({ error: blockedMeError.message })
+
+        const blockedByCurrentUser = normalizeBlockedSet(blockedRows ?? [])
+        const blockedAgainstCurrentUser = normalizeBlockedSet(blockedMeRows ?? [])
+
+        if (isConversationBlockedForUser(req.user.id, (conversationMembers ?? []).map((row) => row.user_id), blockedByCurrentUser, blockedAgainstCurrentUser)) {
+            return res.status(403).json({ error: 'You cannot access messages with this user because you are blocked or have blocked them.' })
         }
 
         const { data, error } = await supabase
@@ -90,6 +119,34 @@ const sendMessage = async (req, res) => {
 
         if (membershipError) return res.status(500).json({ error: membershipError.message })
         if (!membership) return res.status(403).json({ error: 'You are not a member of this conversation' })
+
+        const { data: conversationMembers, error: membersError } = await supabase
+            .from('conversation_members')
+            .select('user_id')
+            .eq('conversation_id', conversation_id)
+
+        if (membersError) return res.status(500).json({ error: membersError.message })
+
+        const { data: blockedRows, error: blockedError } = await supabase
+            .from('blocked_users')
+            .select('blocked_id')
+            .eq('blocker_id', req.user.id)
+
+        if (blockedError) return res.status(500).json({ error: blockedError.message })
+
+        const { data: blockedMeRows, error: blockedMeError } = await supabase
+            .from('blocked_users')
+            .select('blocker_id')
+            .eq('blocked_id', req.user.id)
+
+        if (blockedMeError) return res.status(500).json({ error: blockedMeError.message })
+
+        const blockedByCurrentUser = normalizeBlockedSet(blockedRows ?? [])
+        const blockedAgainstCurrentUser = normalizeBlockedSet(blockedMeRows ?? [])
+
+        if (isConversationBlockedForUser(req.user.id, (conversationMembers ?? []).map((row) => row.user_id), blockedByCurrentUser, blockedAgainstCurrentUser)) {
+            return res.status(403).json({ error: 'You cannot send a message to this user because you are blocked or have blocked them.' })
+        }
 
         const normalizedAttachment = attachment && typeof attachment === 'object' ? attachment : null
         const messagePayload = {

@@ -332,10 +332,6 @@
   background: rgba(255, 255, 255, 0.04);
 }
 
-.conversation-menu-popover button.disabled {
-  color: var(--wa-text-soft);
-  cursor: not-allowed;
-}
 
 .conversation-avatar-wrap {
   position: relative;

@@ -1,30 +1,17 @@
 /* eslint-disable react-refresh/only-export-components */
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
-import { isSupabaseConfigured, supabase } from '../Services/supabase'
+import {
+  getRememberPreference,
+  isSupabaseConfigured,
+  setSupabaseStoragePreference,
+  supabase,
+} from '../Services/supabase'
 import { createUserProfile } from '../Services/api'
 
 const AuthContext = createContext(null)
-const REMEMBER_ME_KEY = 'nexchat:remember-me'
 
 const setRememberPreference = (rememberMe) => {
-  if (typeof window === 'undefined') return
-
-  window.localStorage.setItem(REMEMBER_ME_KEY, String(Boolean(rememberMe)))
-
-  if (!rememberMe) {
-    Object.keys(window.localStorage).forEach((key) => {
-      if (key.startsWith('sb-') && /auth|session/i.test(key)) {
-        window.localStorage.removeItem(key)
-      }
-    })
-  }
-}
-
-const getRememberPreference = () => {
-  if (typeof window === 'undefined') return true
-
-  const saved = window.localStorage.getItem(REMEMBER_ME_KEY)
-  return saved === null ? true : saved !== 'false'
+  setSupabaseStoragePreference(Boolean(rememberMe))
 }
 
 const mapUser = (supabaseUser) => {
@@ -61,17 +48,7 @@ export function AuthProvider({ children }) {
       return
     }
 
-    if (!getRememberPreference()) {
-      Object.keys(window.localStorage).forEach((key) => {
-        if (key.startsWith('sb-') && /auth|session/i.test(key)) {
-          window.localStorage.removeItem(key)
-        }
-      })
-      setSession(null)
-      setUser(null)
-      setLoading(false)
-      return
-    }
+    setSupabaseStoragePreference(getRememberPreference())
 
     const { data, error: sessionError } = await supabase.auth.getSession()
     if (sessionError) setError('Unable to restore your session.')
@@ -119,14 +96,6 @@ export function AuthProvider({ children }) {
     if (loginError) {
       setError(loginError.message)
       throw new Error(loginError.message)
-    }
-
-    if (!rememberMe) {
-      Object.keys(window.localStorage).forEach((key) => {
-        if (key.startsWith('sb-') && /auth|session/i.test(key)) {
-          window.localStorage.removeItem(key)
-        }
-      })
     }
 
     applySession(data.session)
@@ -207,12 +176,8 @@ export function AuthProvider({ children }) {
 
   const logout = useCallback(async () => {
     if (typeof window !== 'undefined') {
-      window.localStorage.removeItem(REMEMBER_ME_KEY)
-      Object.keys(window.localStorage).forEach((key) => {
-        if (key.startsWith('sb-') && /auth|session/i.test(key)) {
-          window.localStorage.removeItem(key)
-        }
-      })
+      setSupabaseStoragePreference(false)
+      window.localStorage.removeItem('nexchat:remember-me')
     }
 
     if (!isSupabaseConfigured) {
@@ -267,12 +232,13 @@ export function AuthProvider({ children }) {
     const nextFullName = profile.full_name.trim()
     const nextUsername = profile.username.trim().toLowerCase()
     const nextBio = profile.bio?.trim() || 'Available for a quick chat'
+    const nextAvatarUrl = profile.avatar_url || null
 
     const { data, error: updateError } = await supabase.auth.updateUser({
       data: {
         full_name: nextFullName,
         username: nextUsername,
-        avatar_url: profile.avatar_url || null,
+        avatar_url: nextAvatarUrl,
         bio: nextBio,
         status: nextBio,
       },
@@ -283,12 +249,30 @@ export function AuthProvider({ children }) {
       throw new Error(updateError.message)
     }
 
-    setUser(mapUser(data.user))
+    const { data: freshUserData, error: freshUserError } = await supabase.auth.getUser()
+    const refreshedUser = mapUser(freshUserData?.user ?? data.user)
+
+    if (!freshUserError && refreshedUser) {
+      setUser(refreshedUser)
+    } else {
+      setUser(mapUser({
+        ...data.user,
+        user_metadata: {
+          ...(data.user?.user_metadata ?? {}),
+          full_name: nextFullName,
+          username: nextUsername,
+          avatar_url: nextAvatarUrl,
+          bio: nextBio,
+          status: nextBio,
+        },
+      }))
+    }
+
     await createUserProfile({
       username: nextUsername,
       full_name: nextFullName,
       email: data.user.email,
-      avatar_url: profile.avatar_url || null,
+      avatar_url: nextAvatarUrl,
       bio: nextBio,
     }, session?.access_token)
   }, [session?.access_token])

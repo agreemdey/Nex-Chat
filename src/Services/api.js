@@ -61,6 +61,18 @@ export const getUserById = (userId, token) =>
 export const searchUsers = (query, token) =>
     request(`/users/search?q=${encodeURIComponent(query)}`, token)
 
+export const getBlockedUsers = (token) => request('/users/blocked', token)
+
+export const blockUser = (userId, token) =>
+    request(`/users/${encodeURIComponent(userId)}/block`, token, {
+        method: 'POST',
+    })
+
+export const unblockUser = (userId, token) =>
+    request(`/users/${encodeURIComponent(userId)}/block`, token, {
+        method: 'DELETE',
+    })
+
 export const createUserProfile = (profile, token) =>
     request('/users/profile', token, {
         method: 'POST',

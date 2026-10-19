@@ -29,6 +29,8 @@ function Sidebar() {
         togglePinChat,
         clearCurrentConversation,
         deleteCurrentConversation,
+        toggleBlockUser,
+        blockedUsers,
         filterCounts,
         messagesByChat,
         formatConversationTimestamp,
@@ -99,6 +101,18 @@ function Sidebar() {
         if (action === 'delete') {
             if (window.confirm('Delete this chat?')) {
                 await deleteCurrentConversation(conversationId)
+            }
+            return
+        }
+
+        if (action === 'block') {
+            const conversation = filteredChats.find((item) => item.id === conversationId) ?? currentChat
+            const otherUserId = conversation?.type === 'direct'
+                ? (conversation.memberIds ?? []).find((memberId) => memberId !== user?.id) ?? null
+                : null
+
+            if (otherUserId) {
+                await toggleBlockUser(otherUserId)
             }
             return
         }
@@ -325,18 +339,33 @@ function Sidebar() {
                                             }}>
                                                 Delete chat
                                             </button>
-                                            <button type="button" role="menuitem" className="disabled" aria-label="Block conversation disabled" onClick={(event) => event.preventDefault()} onKeyDown={(event) => {
-                                                if (event.key === 'Escape') setOpenMenuId(null)
-                                                if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-                                                    event.preventDefault()
-                                                    const menuButtons = Array.from(event.currentTarget.parentElement.querySelectorAll('[role="menuitem"]'))
-                                                    const currentIndex = menuButtons.indexOf(event.currentTarget)
-                                                    const nextIndex = (currentIndex + (event.key === 'ArrowDown' ? 1 : -1) + menuButtons.length) % menuButtons.length
-                                                    menuButtons[nextIndex].focus()
-                                                }
-                                            }}>
-                                                Block
-                                            </button>
+                                            {(() => {
+                                                const otherUserId = conversation.type === 'direct'
+                                                    ? (conversation.memberIds ?? []).find((memberId) => memberId !== user?.id) ?? null
+                                                    : null
+                                                const isBlocked = otherUserId ? blockedUsers.map(String).includes(String(otherUserId)) : false
+
+                                                return (
+                                                    <button
+                                                        type="button"
+                                                        role="menuitem"
+                                                        aria-label={isBlocked ? 'Unblock conversation' : 'Block conversation'}
+                                                        onClick={() => handleConversationAction(conversation.id, 'block')}
+                                                        onKeyDown={(event) => {
+                                                            if (event.key === 'Escape') setOpenMenuId(null)
+                                                            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                                                                event.preventDefault()
+                                                                const menuButtons = Array.from(event.currentTarget.parentElement.querySelectorAll('[role="menuitem"]'))
+                                                                const currentIndex = menuButtons.indexOf(event.currentTarget)
+                                                                const nextIndex = (currentIndex + (event.key === 'ArrowDown' ? 1 : -1) + menuButtons.length) % menuButtons.length
+                                                                menuButtons[nextIndex].focus()
+                                                            }
+                                                        }}
+                                                    >
+                                                        {isBlocked ? 'Unblock' : 'Block'}
+                                                    </button>
+                                                )
+                                            })()}
                                         </div>
                                     )}
                                 </div>

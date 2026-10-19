@@ -112,7 +112,7 @@ a {
   height: 32px;
   place-items: center;
   border-radius: 11px;
-  background: #c084fc;
+  background: #9033f6;
   color: var(--white);
   font-size: 21px;
   line-height: 1;
@@ -284,6 +284,7 @@ a {
   height: 2px;
   margin: 5px auto;
   background: var(--ink);
+  color: white;
   transition: transform 180ms ease;
 }
 
@@ -1456,7 +1457,7 @@ a {
   place-items: center;
   border-radius: 12px;
   background: #9033f6;
-  color: #0e0c0c;
+  color: white;
   font-family: 'Space Grotesk', sans-serif;
   font-size: 18px;
 }

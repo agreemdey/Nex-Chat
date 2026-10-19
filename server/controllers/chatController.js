@@ -1,5 +1,6 @@
 /* global require, module */
 const supabase = require('../config/database')
+const { normalizeBlockedSet, isConversationBlockedForUser } = require('../utils/blocking')
 
 const getChats = async (req, res) => {
     try {
@@ -19,6 +20,27 @@ const getChats = async (req, res) => {
         if (!conversationIds.length) {
             return res.status(200).json([])
         }
+
+        const { data: blockedRows, error: blockedError } = await supabase
+            .from('blocked_users')
+            .select('blocked_id')
+            .eq('blocker_id', req.user.id)
+
+        if (blockedError) {
+            return res.status(500).json({ error: blockedError.message })
+        }
+
+        const { data: blockedMeRows, error: blockedMeError } = await supabase
+            .from('blocked_users')
+            .select('blocker_id')
+            .eq('blocked_id', req.user.id)
+
+        if (blockedMeError) {
+            return res.status(500).json({ error: blockedMeError.message })
+        }
+
+        const blockedByCurrentUser = normalizeBlockedSet(blockedRows ?? [])
+        const blockedAgainstCurrentUser = normalizeBlockedSet(blockedMeRows ?? [])
 
         const { data, error } = await supabase
             .from('conversations')
@@ -90,7 +112,8 @@ const getChats = async (req, res) => {
         if (memberIds.length) {
             const { data: userRows, error: usersError } = await supabase
                 .from('users')
-            .select('id, full_name, username, avatar_url')
+                .select('id, full_name, username, avatar_url')
+
             if (usersError) {
                 return res.status(500).json({ error: usersError.message })
             }
@@ -98,34 +121,51 @@ const getChats = async (req, res) => {
             userMap = new Map((userRows ?? []).map((user) => [user.id, user]))
         }
 
-        const normalized = (data ?? []).map((conversation) => {
-            const latestMessage = latestMessageByConversation.get(conversation.id)
-            const lastMessageText = latestMessage?.content ?? ''
-            const unreadCount = unreadCountsByConversation.get(conversation.id) ?? 0
-            const nextConversation = {
-                ...conversation,
-                last_message: lastMessageText,
-                lastMessage: lastMessageText,
-                preview: lastMessageText || conversation.preview || 'No messages yet',
-                updated_at: latestMessage?.created_at ?? conversation.updated_at,
-                unread_count: unreadCount,
-                unreadCount,
-            }
+        const normalized = (data ?? [])
+            .map((conversation) => {
+                const nextConversation = {
+                    ...conversation,
+                    last_message: '',
+                    lastMessage: '',
+                    preview: 'No messages yet',
+                    updated_at: conversation.updated_at,
+                    unread_count: 0,
+                    unreadCount: 0,
+                }
 
-            if (conversation.type !== 'direct') return nextConversation
+                const latestMessage = latestMessageByConversation.get(conversation.id)
+                const lastMessageText = latestMessage?.content ?? ''
+                const unreadCount = unreadCountsByConversation.get(conversation.id) ?? 0
 
-            const memberIdsInConversation = (conversation.conversation_members ?? []).map((member) => member.user_id).filter(Boolean)
-            const otherUserId = memberIdsInConversation.find((userId) => userId !== req.user.id)
-            const otherUser = otherUserId ? userMap.get(otherUserId) : null
+                const preparedConversation = {
+                    ...nextConversation,
+                    last_message: lastMessageText,
+                    lastMessage: lastMessageText,
+                    preview: lastMessageText || conversation.preview || 'No messages yet',
+                    updated_at: latestMessage?.created_at ?? conversation.updated_at,
+                    unread_count: unreadCount,
+                    unreadCount,
+                }
 
-            return {
-                ...nextConversation,
-                avatar_url: otherUser?.avatar_url ?? nextConversation.avatar_url ?? null,
-                name: otherUser
-                    ? (otherUser.full_name || otherUser.username || conversation.name || 'Direct message')
-                    : (conversation.name || 'Direct message'),
-            }
-        })
+                if (conversation.type !== 'direct') return preparedConversation
+
+                const memberIdsInConversation = (conversation.conversation_members ?? []).map((member) => member.user_id).filter(Boolean)
+                const otherUserId = memberIdsInConversation.find((userId) => userId !== req.user.id)
+                const otherUser = otherUserId ? userMap.get(otherUserId) : null
+
+                if (isConversationBlockedForUser(req.user.id, memberIdsInConversation, blockedByCurrentUser, blockedAgainstCurrentUser)) {
+                    return null
+                }
+
+                return {
+                    ...preparedConversation,
+                    avatar_url: otherUser?.avatar_url ?? preparedConversation.avatar_url ?? null,
+                    name: otherUser
+                        ? (otherUser.full_name || otherUser.username || conversation.name || 'Direct message')
+                        : (conversation.name || 'Direct message'),
+                }
+            })
+            .filter(Boolean)
 
         res.status(200).json(normalized)
     } catch (error) {

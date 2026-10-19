@@ -1,5 +1,6 @@
 /* global require, module */
 const supabase = require('../config/database')
+const { normalizeBlockedSet } = require('../utils/blocking')
 
 const getMembership = async (conversationId, userId) => {
   const { data, error } = await supabase
@@ -12,6 +13,34 @@ const getMembership = async (conversationId, userId) => {
   return { membership: data, error }
 }
 
+const assertUserCanInteractWithTarget = async (userId, targetUserId) => {
+  const { data: blockedRows, error: blockedError } = await supabase
+    .from('blocked_users')
+    .select('blocked_id')
+    .eq('blocker_id', userId)
+
+  if (blockedError) throw blockedError
+
+  const { data: blockedMeRows, error: blockedMeError } = await supabase
+    .from('blocked_users')
+    .select('blocker_id')
+    .eq('blocked_id', userId)
+
+  if (blockedMeError) throw blockedMeError
+
+  const blockedByCurrentUser = normalizeBlockedSet(blockedRows ?? [])
+  const blockedAgainstCurrentUser = normalizeBlockedSet(blockedMeRows ?? [])
+
+  if (
+    blockedByCurrentUser.has(String(targetUserId)) ||
+    blockedAgainstCurrentUser.has(String(targetUserId))
+  ) {
+    return { allowed: false }
+  }
+
+  return { allowed: true }
+}
+
 const createConversation = async (req, res) => {
   const { name, type = 'group', memberIds = [] } = req.body
   const members = [...new Set([req.user.id, ...memberIds].filter(Boolean))]
@@ -19,6 +48,15 @@ const createConversation = async (req, res) => {
   if (type === 'direct') {
     const otherMember = members.find((userId) => userId !== req.user.id)
     if (!otherMember) return res.status(400).json({ error: 'Select a user to message.' })
+
+    try {
+      const { allowed } = await assertUserCanInteractWithTarget(req.user.id, otherMember)
+      if (!allowed) {
+        return res.status(403).json({ error: 'This user is blocked or has blocked you.' })
+      }
+    } catch (error) {
+      return res.status(500).json({ error: error.message })
+    }
 
     const { data: otherUser, error: otherUserError } = await supabase
       .from('users')
@@ -55,6 +93,18 @@ const createConversation = async (req, res) => {
       memberIds: members,
       avatar_url: otherUser?.avatar_url ?? null,
     })
+  }
+
+  const blockedMemberIds = (members ?? []).filter((userId) => userId !== req.user.id)
+  for (const memberId of blockedMemberIds) {
+    try {
+      const { allowed } = await assertUserCanInteractWithTarget(req.user.id, memberId)
+      if (!allowed) {
+        return res.status(403).json({ error: 'One of the selected users is blocked or has blocked you.' })
+      }
+    } catch (error) {
+      return res.status(500).json({ error: error.message })
+    }
   }
 
   const conversationName = name?.trim()
